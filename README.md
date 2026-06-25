@@ -35,11 +35,6 @@ O que cada entrada/saída representa:
 
 ## 2. Por que foi feito assim (as decisões que importam)
 
-**Por que Wi-Fi (e não cabo USB).** A placa didática usada compartilha os pinos
-da porta serial (USB) com o display de 7 segmentos. Usar a serial apagaria
-partes do display. A saída foi comunicar por Wi-Fi, o que de quebra deixa o
-notebook livre de cabos.
-
 **Por que o ESP32 cria a própria rede Wi-Fi.** Para uma apresentação não
 depender de roteador, senha de convidado ou TI: o ESP32 sobe como um ponto de
 acesso fixo (rede `BAJA_TELEM`, sempre no endereço `192.168.4.1`). Conecta e
