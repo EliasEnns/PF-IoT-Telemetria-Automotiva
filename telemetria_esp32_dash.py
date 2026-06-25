@@ -1564,39 +1564,40 @@ def cb_log_dropdown_to_path(selected):
     return selected if selected else no_update
 
 
-# ---- Atualização dos gráficos (reconstrução completa, robusta) -------------
+# ---- Atualização dos gráficos (um callback por gráfico) --------------------
 #
-# Um único callback redesenha os 6 gráficos. Dispara no tick (dados novos) e no
-# graph-reset-signal (troca de fonte/playback). Para poupar tráfego, devolve
-# no_update num gráfico cujo último instante não mudou desde o último envio —
-# esse controle usa só o timestamp (não a estrutura da figura), então é imune
-# aos problemas que o dash.Patch tinha com o backend WebGL.
+# Dash 2.16+ computa um fingerprint hash para callbacks multi-output e o envia
+# no request do browser; o servidor, ao registrar sem allow_duplicate, armazena
+# a chave SEM esse hash → KeyError. A solução é um callback por gráfico: sem
+# multi-output, sem fingerprint, sem mismatch.
+
+def _make_graph_cb(var):
+    @app.callback(
+        Output(f"graph-{var}", "figure"),
+        Input("tick", "n_intervals"),
+        Input("graph-reset-signal", "data"),
+    )
+    def _cb(_n, _reset, _var=var):
+        forcar = ctx.triggered_id == "graph-reset-signal"
+        gid = f"graph-{_var}"
+        samples = data_store.get_recent_samples(_var, MAX_GRAPH_POINTS)
+        last_ts = samples[-1][0] if samples else None
+        if not forcar and last_ts == graph_tracker.get(gid):
+            return no_update
+        graph_tracker.set(gid, last_ts)
+        return make_single_figure(_var, samples)
+
+for _var in VAR_KEYS:
+    _make_graph_cb(_var)
+
 
 @app.callback(
-    Output("graph-vel", "figure"),
-    Output("graph-acel", "figure"),
-    Output("graph-temp", "figure"),
-    Output("graph-umid", "figure"),
-    Output("graph-lum", "figure"),
     Output("graph-digitais", "figure"),
     Input("tick", "n_intervals"),
     Input("graph-reset-signal", "data"),
 )
-def cb_update_graphs(_n, reset_signal):
-    forcar = ctx.triggered_id == "graph-reset-signal"   # troca de fonte: redesenha tudo
-    out = []
-
-    for var in VAR_KEYS:
-        gid = f"graph-{var}"
-        samples = data_store.get_recent_samples(var, MAX_GRAPH_POINTS)
-        last_ts = samples[-1][0] if samples else None
-        if not forcar and last_ts == graph_tracker.get(gid):
-            out.append(no_update)            # nada novo neste gráfico
-        else:
-            graph_tracker.set(gid, last_ts)
-            out.append(make_single_figure(var, samples))
-
-    # Gráfico de estados digitais (2 traces)
+def cb_update_graph_digitais(_n, _reset):
+    forcar = ctx.triggered_id == "graph-reset-signal"
     gid = "graph-digitais"
     series = data_store.get_recent_digital(MAX_GRAPH_POINTS)
     last_ts = None
@@ -1605,12 +1606,9 @@ def cb_update_graphs(_n, reset_signal):
             ts_k = series[k][-1][0]
             last_ts = ts_k if last_ts is None else max(last_ts, ts_k)
     if not forcar and last_ts == graph_tracker.get(gid):
-        out.append(no_update)
-    else:
-        graph_tracker.set(gid, last_ts)
-        out.append(make_digital_figure(series))
-
-    return tuple(out)
+        return no_update
+    graph_tracker.set(gid, last_ts)
+    return make_digital_figure(series)
 
 
 # ---- Tick: indicadores numéricos / digitais --------------------------------
