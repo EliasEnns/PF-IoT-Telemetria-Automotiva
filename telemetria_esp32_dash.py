@@ -61,7 +61,6 @@ from dash import (
     Dash,
     Input,
     Output,
-    Patch,
     State,
     ctx,
     dash_table,
@@ -946,13 +945,24 @@ class PlaybackManager:
 # SECTION 9 — FIGURAS PLOTLY
 # =============================================================================
 
-def make_single_figure(var: str) -> go.Figure:
-    """Gráfico dedicado de uma variável (uma trace, área preenchida)."""
+# NOTA DE DESIGN: usamos go.Scatter (SVG), NÃO go.Scattergl (WebGL).
+# Cada dcc.Graph com Scattergl abre um contexto WebGL no navegador; com 6
+# gráficos isso estourava o limite de contextos do browser e os gráficos
+# "sumiam". Em SVG, 200 pontos por gráfico a 10 Hz é leve e 100% estável.
+# Também reconstruímos a figura inteira a cada tick (em vez de dash.Patch),
+# o que é mais robusto entre versões de Dash/Plotly; o uirevision preserva
+# zoom/pan do usuário mesmo recriando a figura.
+
+def make_single_figure(var: str,
+                       samples: Optional[list[tuple[float, float]]] = None) -> go.Figure:
+    """Gráfico dedicado de uma variável. Se `samples` for dado, já o desenha."""
     meta = TELEMETRY_VARIABLES[var]
     color = VAR_COLORS.get(var, COL_ACCENT)
+    xs = [s[0] for s in samples] if samples else []
+    ys = [s[1] for s in samples] if samples else []
     fig = go.Figure()
-    fig.add_trace(go.Scattergl(
-        x=[], y=[], mode="lines", name=meta["label"],
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="lines", name=meta["label"],
         line=dict(color=color, width=2), fill="tozeroy",
         hovertemplate="%{x} ms<br>%{y:.1f} " + meta["unit"] + "<extra></extra>",
     ))
@@ -970,13 +980,19 @@ def make_single_figure(var: str) -> go.Figure:
     return fig
 
 
-def make_digital_figure() -> go.Figure:
-    """Gráfico de estados digitais (emergência/freio) como degraus 0/1."""
-    fig = go.Figure()
+def make_digital_figure(
+        series: Optional[dict[str, list[tuple[float, int]]]] = None) -> go.Figure:
+    """Gráfico de estados digitais (emergência/freio) como degraus 0/1.
+    Se `series` for dado, já o desenha (freio deslocado p/ não sobrepor)."""
+    offsets = {"emergencia": 0.0, "freio": 1.3}
     colors = {"emergencia": COL_ERR, "freio": COL_WARN}
+    fig = go.Figure()
     for k in DIGITAL_KEYS:
-        fig.add_trace(go.Scattergl(
-            x=[], y=[], mode="lines", name=DIGITAL_LABELS[k],
+        pts = series.get(k, []) if series else []
+        xs = [p[0] for p in pts]
+        ys = [p[1] + offsets[k] for p in pts]
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="lines", name=DIGITAL_LABELS[k],
             line=dict(color=colors[k], width=2, shape="hv"),
             hovertemplate=DIGITAL_LABELS[k] + ": %{y}<extra></extra>",
         ))
@@ -1548,7 +1564,13 @@ def cb_log_dropdown_to_path(selected):
     return selected if selected else no_update
 
 
-# ---- Reset (rebuild) de todos os gráficos ----------------------------------
+# ---- Atualização dos gráficos (reconstrução completa, robusta) -------------
+#
+# Um único callback redesenha os 6 gráficos. Dispara no tick (dados novos) e no
+# graph-reset-signal (troca de fonte/playback). Para poupar tráfego, devolve
+# no_update num gráfico cujo último instante não mudou desde o último envio —
+# esse controle usa só o timestamp (não a estrutura da figura), então é imune
+# aos problemas que o dash.Patch tinha com o backend WebGL.
 
 @app.callback(
     Output("graph-vel", "figure"),
@@ -1557,78 +1579,37 @@ def cb_log_dropdown_to_path(selected):
     Output("graph-umid", "figure"),
     Output("graph-lum", "figure"),
     Output("graph-digitais", "figure"),
+    Input("tick", "n_intervals"),
     Input("graph-reset-signal", "data"),
 )
-def cb_reset_graphs(_reset):
-    graph_tracker.reset_all()
-    return (make_single_figure("vel"), make_single_figure("acel"),
-            make_single_figure("temp"), make_single_figure("umid"),
-            make_single_figure("lum"), make_digital_figure())
+def cb_update_graphs(_n, reset_signal):
+    forcar = ctx.triggered_id == "graph-reset-signal"   # troca de fonte: redesenha tudo
+    out = []
 
+    for var in VAR_KEYS:
+        gid = f"graph-{var}"
+        samples = data_store.get_recent_samples(var, MAX_GRAPH_POINTS)
+        last_ts = samples[-1][0] if samples else None
+        if not forcar and last_ts == graph_tracker.get(gid):
+            out.append(no_update)            # nada novo neste gráfico
+        else:
+            graph_tracker.set(gid, last_ts)
+            out.append(make_single_figure(var, samples))
 
-# ---- Tick: atualização incremental dos gráficos (PATCH) --------------------
-
-def _patch_var(var):
-    """Devolve um Patch com os pontos novos da variável, ou no_update."""
-    gid = f"graph-{var}"
-    prev = graph_tracker.get(gid)
-    samples = data_store.get_recent_samples(var, MAX_GRAPH_POINTS)
-    if not samples:
-        if prev is not None:
-            graph_tracker.set(gid, -1.0)
-            patched = Patch()
-            patched["data"][0]["x"] = []
-            patched["data"][0]["y"] = []
-            return patched
-        return no_update
-    last_ts = samples[-1][0]
-    if last_ts == prev:
-        return no_update
-    graph_tracker.set(gid, last_ts)
-    patched = Patch()
-    patched["data"][0]["x"] = [s[0] for s in samples]
-    patched["data"][0]["y"] = [s[1] for s in samples]
-    return patched
-
-
-@app.callback(
-    Output("graph-vel", "figure", allow_duplicate=True),
-    Output("graph-acel", "figure", allow_duplicate=True),
-    Output("graph-temp", "figure", allow_duplicate=True),
-    Output("graph-umid", "figure", allow_duplicate=True),
-    Output("graph-lum", "figure", allow_duplicate=True),
-    Output("graph-digitais", "figure", allow_duplicate=True),
-    Input("tick", "n_intervals"),
-    prevent_initial_call=True,
-)
-def cb_tick_graphs(_n):
-    out = [_patch_var(v) for v in VAR_KEYS]
-
-    # Gráfico de digitais (2 traces, com offset visual no freio)
+    # Gráfico de estados digitais (2 traces)
     gid = "graph-digitais"
-    prev = graph_tracker.get(gid)
     series = data_store.get_recent_digital(MAX_GRAPH_POINTS)
     last_ts = None
     for k in DIGITAL_KEYS:
         if series[k]:
             ts_k = series[k][-1][0]
             last_ts = ts_k if last_ts is None else max(last_ts, ts_k)
-    if last_ts is None:
-        out.append(no_update)
-    elif last_ts == prev:
+    if not forcar and last_ts == graph_tracker.get(gid):
         out.append(no_update)
     else:
         graph_tracker.set(gid, last_ts)
-        pd = Patch()
-        offsets = {"emergencia": 0.0, "freio": 1.3}
-        for i, k in enumerate(DIGITAL_KEYS):
-            off = offsets[k]
-            pd["data"][i]["x"] = [s[0] for s in series[k]]
-            pd["data"][i]["y"] = [s[1] + off for s in series[k]]
-        out.append(pd)
+        out.append(make_digital_figure(series))
 
-    if all(o is no_update for o in out):
-        return tuple(no_update for _ in out)
     return tuple(out)
 
 

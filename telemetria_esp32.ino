@@ -17,7 +17,7 @@
  * - Botão 3      (GPIO2)  ........ EMERGÊNCIA (entrada digital)
  * - Botão 4      (GPIO15) ........ FREIO      (entrada digital)
  * - LED 1        (GPIO4)  ........ luz do PIT       (saída comandada pelo PC)
- * - LED 2        (GPIO0)  ........ BANDEIRA vermelha (saída comandada pelo PC)
+ * - LED RGB azul (GPIO27) ........ BANDEIRA (saída comandada pelo PC)
  * - Display 7seg (2 díg.) ........ velocidade 00..99 km/h
  *
  * A temperatura do "motor" é SIMULADA a partir da carga do acelerador (ver
@@ -41,8 +41,8 @@
  *
  * @warning AVISOS DE HARDWARE desta devboard:
  *  -# O display usa GPIO1 (TX0) e GPIO3 (RX0): a Serial NÃO é utilizada.
- *  -# GPIO0/GPIO2/GPIO15 são pinos de strapping; o pull-up de fábrica mantém o
- *     boot normal mesmo com os botões/LEDs conectados.
+ *  -# GPIO2 e GPIO15 (botões) são pinos de strapping; o pull-up de fábrica
+ *     mantém o boot normal mesmo com os botões conectados.
  *  -# O relé (GPIO13) causa brownout e nunca é acionado.
  *  -# Sem capacitores de desacoplamento: ADC ruidoso, filtragem obrigatória.
  *
@@ -116,16 +116,17 @@ byte segNum[][8] =
 byte display_pins[] = {A, B, C, D, E, F, G, DP, DISPLAY1, DISPLAY2};
 
 /** @name Papéis efetivos dos pinos neste projeto (apelidos legíveis)
- *  @note Configuração LED 1/2 + Botão 3/4 (o Botão 2/GPIO0 original apresentava
- *        mau contato; esta disposição também tira a entrada do GPIO0, que é
- *        sensível no boot, e a coloca em GPIO15, inofensivo se pressionado). */
+ *  @note O Botão 2 (GPIO0) original tinha mau contato, então as entradas
+ *        passaram para os Botões 3/4 (GPIO2/GPIO15) e as saídas para o LED 1
+ *        (PIT) e uma cor do LED RGB (bandeira). Isso também tira a entrada do
+ *        GPIO0, que é sensível no boot. */
 ///@{
 #define PIN_ACELERADOR   POTENCIOMETRO  ///< Acelerador (potenciômetro, ADC1)
 #define PIN_LUM          LDR            ///< Luminosidade (LDR, ADC1)
 #define PIN_EMERGENCIA   BOTAO3         ///< Botão de emergência (GPIO2)
 #define PIN_FREIO        BOTAO4         ///< Botão de freio (GPIO15)
 #define PIN_LED_PIT      LED1           ///< Saída: luz do PIT (GPIO4)
-#define PIN_LED_BANDEIRA LED2           ///< Saída: bandeira (GPIO0)
+#define PIN_LED_BANDEIRA RGB_GREEN       ///< Saída: bandeira = LED RGB azul (GPIO27)
 ///@}
 
 /** @brief Pinos dos 7 segmentos + ponto, na ordem da tabela @ref segNum. */
@@ -878,7 +879,12 @@ void setup() {
   pinMode(PIN_LED_PIT, OUTPUT);
   pinMode(PIN_LED_BANDEIRA, OUTPUT);
   digitalWrite(PIN_LED_PIT, LOW);
-  digitalWrite(PIN_LED_BANDEIRA, LOW);   /* GPIO0 é strapping: assume controle só após o boot. */
+  digitalWrite(PIN_LED_BANDEIRA, LOW);
+
+  /* LED RGB: a bandeira usa apenas uma cor (azul). As outras duas cores
+   * precisam ser saídas em LOW, senão o LED comum não acende a cor pura. */
+  pinMode(RGB_RED, OUTPUT);   digitalWrite(RGB_RED, LOW);
+  pinMode(RGB_GREEN, OUTPUT); digitalWrite(RGB_GREEN, LOW);
 
   /* Relé como saída em LOW e NUNCA acionado (evita brownout). */
   pinMode(RELE, OUTPUT);
