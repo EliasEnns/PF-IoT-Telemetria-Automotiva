@@ -1,13 +1,6 @@
-# Telemetria automotiva em ESP32 — visão geral para a equipe
+# Telemetria automotiva em ESP32 — visão geral
 
 Autor: **Elias Enns**
-
-Este documento explica, para quem vai pegar o projeto pela primeira vez, **o que
-é** este sistema, **por que** ele foi construído desta forma e **como** colocá-lo
-para rodar. Não é preciso ser especialista em sistemas embarcados para usar; a
-parte de "por quê" existe justamente para quem quiser entender as decisões.
-
----
 
 ## 1. O que é
 
